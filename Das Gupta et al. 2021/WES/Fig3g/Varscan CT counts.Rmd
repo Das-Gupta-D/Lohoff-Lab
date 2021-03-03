@@ -1,0 +1,33 @@
+---
+title: "Varscan C:T counts"
+output:
+  html_document:
+    df_print: paged
+---
+```{r}
+library(tidyverse)
+```
+
+This short script generates the tables that were used for Fig. 3g
+
+```{r}
+library(readr)
+varscan <- read_delim("data/varscan.csv", 
+                      ";", escape_double = FALSE, col_types = cols(FREQ = col_number()), 
+                      locale = locale(decimal_mark = ","), 
+                      trim_ws = TRUE)
+```
+
+```{r}
+# Tabelle für alle Mutationen
+varscan_count <- varscan %>%
+  count(name, REF, ALT)
+
+# Tabelle für die mono/bi-allelischen Mutationen
+varscan_count_monobi <- varscan %>%
+  filter((FREQ >= 45 & FREQ <= 55 ) | FREQ >= 95) %>%
+   count(name, REF, ALT) 
+```
+
+
+

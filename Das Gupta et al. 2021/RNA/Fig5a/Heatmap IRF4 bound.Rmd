@@ -1,0 +1,165 @@
+---
+title: "Heatmap IRF4 bound"
+output:
+  html_document:
+    df_print: paged
+---
+
+The goal of this analysis is to recreate one analysis that Fede performed that generated a heatmap that was highly particular.
+It featured two datasets we had generated as well as a dataset that contained the genes bound by IRF4 at specific timepoints in B cells (Sciamas et al.).
+The logical behind the heatmap can be explained as:
+
+1) genes were included into the analysis, that showed > 2-fold expression change between Irf4–/– B220+ mIgM- pro/preB cells and leukemia samples
+2) genes were filtered to only include genes that are also differentially regulated in IRF4-RV or EV-RV transduced T11 cells
+3) resultant genes were limited to genes previously shown to be bound by IRF4 using ChIP-seq (Sciamas et al.)
+
+### 1) step 
+```{r}
+library(tidyverse)
+library(readxl)
+TumBM <- read_excel("TumBM.xlsx")
+IRF4GFP <- read_excel("IRF4vsGFP.xlsx")
+
+# import the TumBM scenario and create a column of Log2(foldchange)
+# then filtering only the genes to which the criterium of step 1 applies
+TumBM_red_1 <- TumBM %>%
+  mutate( 
+    FoldChange = (TUM1 + TUM3) / 2 / ((BM1 + BM2) / 2)
+    ) %>%
+  mutate(
+    log2FoldChange = log2(FoldChange)
+    ) %>%
+  rename(
+    "geneSymbol" = "NAME"
+    ) %>%
+  filter(
+    (log2FoldChange >= 1) & (log2FoldChange <= 100) |
+    ((log2FoldChange <= -1) & (log2FoldChange >= -100))
+    ) %>%
+  select(-DESCRIPTION, -FoldChange)
+
+# creating a vector of the genes that remain as a reference for filtering
+Genes_interest_1 <- TumBM_red_1$geneSymbol %>%
+  unlist()
+
+# filtering the IRF4GFP scenario with these genes
+IRF4GFP_red_1 <- IRF4GFP %>%
+  select(geneSymbol, log2FoldChange, GFP1:IRF42) %>%
+  filter(
+    geneSymbol %in% Genes_interest_1
+  )
+```
+
+### 2) step
+```{r}
+# searching for the genes that fullfil criterium 2
+IRF4GFP_red_2 <- IRF4GFP_red_1 %>%
+   mutate( 
+    FoldChange = (IRF41 + IRF42) / 2 / ((GFP1 + GFP2) / 2)
+    ) %>%
+  mutate(
+    log2FoldChange = log2(FoldChange)
+    ) %>%
+  filter(
+    (log2FoldChange <= 0) |
+    (log2FoldChange >= 0.2)
+  ) %>%
+  select(-FoldChange)
+
+
+# creating a vector that contains all the genes that are of interest
+Genes_interest_2 <- IRF4GFP_red_2$geneSymbol %>%
+  unlist()
+
+# the filtering of the TUMBM scenario
+TumBM_red_2 <- TumBM_red_1 %>%
+  filter(
+    geneSymbol %in% Genes_interest_2
+  )
+```
+
+### 3) step (the lazy version)
+Because I trust Fede I will use the genes he found to remain instead of the whole Sciamas dataset
+```{r}
+# creating a vector of the genes of interest
+Genes_interest_3 <- c("Plxna2", "Prkch", "Src", "Ptk2", "Tox", "Mybbp1a",
+                      "Jdp2", "Rbpms", "Noa1", "Slc25a15", "Phgdh", "Rps14",
+                      "Ppa2", "Gemin6", "Txndc11", "Bach2", "Tram2", "Mpeg",
+                      "Nav2", "Cacnae1"
+                      )
+
+# filtering both datatables with the third criterium
+IRF4GFP_red_3 <- IRF4GFP_red_2 %>%
+  filter(
+    geneSymbol %in% Genes_interest_3
+  ) %>%
+  rename(
+    "log2FoldChange_IRF4" = "log2FoldChange"
+  )
+
+TumBM_red_3 <- TumBM_red_2 %>%
+  filter(
+    geneSymbol %in% Genes_interest_3
+  ) %>%
+  rename(
+    "log2FoldChange_TUM" = "log2FoldChange"
+  )
+
+# combining the two tibbles
+combined <- left_join(IRF4GFP_red_3, TumBM_red_3)
+
+```
+
+### Plotting the Heatmap
+```{r}
+install.packages("dendsort")
+library(dendsort)
+library(pheatmap)
+library(svglite)
+
+# Step 1: Create a row-names vector for plotting
+combined <- combined %>%
+  arrange(log2FoldChange_TUM)
+
+Row_names <- as_vector(combined$geneSymbol)
+
+# Step 2: select the columns to plot
+combined_plot <- combined %>%
+  select(
+    log2FoldChange_IRF4,
+    log2FoldChange_TUM
+  ) %>%
+  relocate(
+    log2FoldChange_TUM
+  )
+
+# Step 3: plot using pheatmap
+dat <- as.matrix(combined_plot)
+rownames(dat) <- Row_names
+plot <- pheatmap(dat,
+         scale = "column",
+         cluster_cols = FALSE,
+         cluster_rows = FALSE,
+         gaps_row = 4,
+         fontsize_row = 6,
+         cutree_rows = 2
+)
+    
+# Step 4: write a function for export and export
+save_pheatmap_pdf <- function(x, filename, width=7, height=7) {
+   stopifnot(!missing(x))
+   stopifnot(!missing(filename))
+   pdf(filename, width=width, height=height)
+   grid::grid.newpage()
+   grid::grid.draw(x$gtable)
+   dev.off()
+}
+
+save_pheatmap_pdf(plot, "plot.pdf")
+
+# Clustering of the dendogram sorted -> is not used
+sort_hclust <- function(...) as.hclust(dendsort(as.dendrogram(...)))
+dat_cluster_rows <- sort_hclust(hclust(dist(dat)))
+
+```
+
