@@ -1,0 +1,799 @@
+---
+title: "2021-10-25 T8 I4vGFP Report"
+output: 
+  html_document:
+     number_sections: true
+     toc: true
+     toc_float: true
+---
+
+# setup, preequisits
+
+loading all the libraries that will be needed in this analysis.
+
+```{r setup, message = F}
+# general
+library(tidyverse)
+library(readr)
+library(readxl)
+library(markdown)
+library(rmarkdown)
+library(DT)
+library(cowplot)
+library(ggrepel)
+library(RColorBrewer)
+
+# alignment, DE, annotation
+library(DESeq2)
+# BiocManager::install("biomaRt")
+library(biomaRt)
+# BiocManager::install("org.Mm.eg.db")
+library(org.Mm.eg.db)
+
+# data exploration and analysis
+library(clusterProfiler)
+library(DOSE)
+library(plotly)
+library(GeneTonic)
+# BiocManager::install("pcaExplorer")
+library(pcaExplorer)
+library(visNetwork)
+library(magrittr)
+# install.packages("enrichR")
+library(enrichR)
+# install.packages("pheatmap")
+library(pheatmap)
+library(enrichplot)
+# install.packages("igraph")
+library(igraph) 
+library(visNetwork) 
+library(magrittr) 
+# BiocManager::install("apeglm")
+library(apeglm)
+```
+
+Defining a custom function for the volcano plots (to be able to annote genes belonging to a cluster of gene sets supplied as a character vector)
+
+```{r volcano_markov, message = F}
+volc_distilled <- function(exp_thres, cluster, distilled, data){
+  volcano <- data %>%
+    select(log2FoldChange, padj, geneSymbol, id) %>%
+    arrange(desc(log2FoldChange)) %>%
+    mutate(plog10 = -log(padj)) %>%
+    na.omit()
+  
+  target_cluster <- distilled$res_enrich %>%
+    filter(gs_membership == cluster) %>%
+    select(gs_genes) %>%
+    as_vector() %>%
+    str_split(",") %>%
+    unname() %>%
+    unlist()
+
+volcano_target <- volcano %>%
+   filter(geneSymbol %in% target_cluster)
+
+## Plot function for the volcano plot standard volcano
+p <- ggplot(mapping = aes(x = log2FoldChange, y = `plog10`)) +
+  # general scatter plot with all the genes
+  geom_point(data = volcano %>%
+               filter(
+                 log2FoldChange >= exp_thres | log2FoldChange <= -exp_thres
+               ), 
+             size = 3,
+             alpha = 0.5,
+             color = "grey" 
+             ) +
+  geom_point(data = volcano %>%
+               filter(
+                 (log2FoldChange <= exp_thres & log2FoldChange >= 0) | 
+                  (log2FoldChange >= -exp_thres & log2FoldChange <= 0)
+               ), 
+             size = 3,
+             alpha = 0.01,
+             color = "grey" 
+             ) +
+  theme_minimal() +
+  geom_vline(aes(xintercept = 0)) +
+  geom_vline(aes(xintercept = exp_thres)) +
+  geom_vline(aes(xintercept = -exp_thres)) +
+  theme( axis.line.x = element_line(color="black"),
+         axis.title.x = element_text(size=12, face="bold",
+                                     margin = margin(t = 7, b = 5)),
+         axis.title.y = element_text(size=12, face="bold",
+                                     margin = margin(r = 11, l = 5)),
+         axis.text.x = element_text(size=11, face="bold"),
+         axis.text.y = element_text(size=10, face="bold")
+         ) +
+  guides(color = FALSE) +
+  scale_color_manual(values = c("#A0A09F", "#A7CFEE")) +
+  labs(y = "BH-adjusted P (-log10)",
+       x = "log2(fold change)"
+       )  +
+  xlim(-10, 10) +
+  coord_fixed(ratio = 1/50) +
+  geom_point(data = volcano_target %>%
+               filter(
+                 log2FoldChange >= exp_thres | log2FoldChange <= -exp_thres
+               ), 
+             color = "#BA2B34", 
+             alpha = 0.8,
+             size = 4
+             ) +
+  geom_point(data = volcano_target %>%
+               filter(
+                 (log2FoldChange <= exp_thres & log2FoldChange >= 0) | 
+                  (log2FoldChange >= -exp_thres & log2FoldChange <= 0)
+               ), 
+             color = "#BA2B34", 
+             alpha = 0.1,
+             size = 3
+             ) +
+  geom_text_repel(data = volcano_target %>%
+                    filter(
+                      log2FoldChange >= exp_thres | log2FoldChange <= -exp_thres
+                    ), 
+            aes(label = geneSymbol, x = log2FoldChange-0.1), 
+            size = 3, hjust = 1, vjust = 0, max.overlaps = 15 
+            )
+
+return(p)
+}
+
+volc_distilled2 <- function(exp_thres, gs_ids, data, res_enrich, add){
+    volcano <- data %>%
+    select(log2FoldChange, padj, geneSymbol, id) %>%
+    arrange(desc(log2FoldChange)) %>%
+    mutate(plog10 = -log(padj)) %>%
+    na.omit()
+    
+target <- res_enrich %>%
+  filter(gs_id %in% gs_ids) %>%
+  select(gs_genes) %>% 
+  as_vector() %>%
+  strsplit(",") %>%
+  unlist() %>%
+  unname() %>%
+  c(., add)
+
+volcano_target <- volcano %>%
+   filter(geneSymbol %in% target)
+
+## Plot function for the volcano plot standard volcano
+p <- ggplot(mapping = aes(x = log2FoldChange, y = `plog10`)) +
+  # general scatter plot with all the genes
+  geom_point(data = volcano %>%
+               filter(
+                 log2FoldChange >= exp_thres | log2FoldChange <= -exp_thres
+               ), 
+             size = 3,
+             alpha = 0.5,
+             shape = 21
+             ) +
+  geom_point(data = volcano %>%
+               filter(
+                 (log2FoldChange <= exp_thres & log2FoldChange >= 0) | 
+                  (log2FoldChange >= -exp_thres & log2FoldChange <= 0)
+               ), 
+             size = 3,
+             alpha = 0.01,
+             shape = 21
+             ) +
+  theme_minimal() +
+  geom_vline(aes(xintercept = 0)) +
+  geom_vline(aes(xintercept = exp_thres)) +
+  geom_vline(aes(xintercept = -exp_thres)) +
+  theme( axis.line.x = element_line(color="black"),
+         axis.title.x = element_text(size=12, face="bold",
+                                     margin = margin(t = 7, b = 5)),
+         axis.title.y = element_text(size=12, face="bold",
+                                     margin = margin(r = 11, l = 5)),
+         axis.text.x = element_text(size=11, face="bold"),
+         axis.text.y = element_text(size=10, face="bold")
+         ) +
+  guides(color = FALSE) +
+  scale_color_manual(values = c("#A0A09F", "#A7CFEE")) +
+  labs(y = "BH-adjusted P (-log10)",
+       x = "log2(fold change)"
+       )  +
+  xlim(-10, 10) +
+  coord_fixed(ratio = 1/50) +
+  geom_point(data = volcano_target %>%
+               filter(
+                 log2FoldChange >= exp_thres | log2FoldChange <= -exp_thres
+               ), 
+             color = "#BA2B34", 
+             alpha = 1,
+             size = 3
+             ) +
+  geom_point(data = volcano_target %>%
+               filter(
+                 (log2FoldChange <= exp_thres & log2FoldChange >= 0) | 
+                  (log2FoldChange >= -exp_thres & log2FoldChange <= 0)
+               ), 
+             color = "#BA2B34", 
+             alpha = 0.1,
+             size = 3
+             ) +
+  geom_text_repel(data = volcano_target %>%
+                    filter(
+                      log2FoldChange >= exp_thres | log2FoldChange <= -exp_thres
+                    ), 
+            aes(label = geneSymbol, x = log2FoldChange-0.1), 
+            size = 3, hjust = 1, vjust = 0, max.overlaps = 15 
+            )
+
+return(p)
+}
+```
+
+Reading in the gene tonic data set (containing DESeq2 results as well as GO ORA analysis)
+
+```{r data_load}
+data <- readRDS("gtl_condition_g2_vs_g1.rds")
+```
+
+Providing an annotation file for the PCA Explorer, acquiring the consensus gene names per ENSEMBL ID
+
+```{r annotation, cache = T, message = F}
+anno <- get_annotation(data$dds, 
+                       biomart_dataset = "mmusculus_gene_ensembl", 
+                       idtype = "ensembl_gene_id")
+```
+
+# Starting the Shiny Apps (by Federico Marini) with GUI
+
+## GeneTonic
+
+```{r GeneTonic_Shiny, eval = F}
+GeneTonic(gtl = data,
+          project_id = "T8_I4vGFP")
+
+```
+
+## pcaExplorer
+
+```{r pcaExplorer_Shiny, eval = F, dependson = "annotation"}
+pcaExplorer(dds = data$dds,
+            annotation = anno)
+```
+
+# Data analysis of ORA results
+
+## Overview and clustered GO analysis of DE genes
+
+Identifying differentially expressed gene sets between the two conditions. DESeq2 results as well as the result of ORA analysis of GO gene sets for the present dataset are provided. Here, we will have a look at the top 30 differentially expressed GO sets.
+
+```{r GO_overview}
+p <- enhance_table(gtl = data,
+                   n_gs = 30,
+                   chars_limit = 60)
+ggplotly(p)
+
+# ggsave("Go_overview.pdf")
+```
+
+Reporting the top 100 genesets for later lookup as an interactive table.
+
+```{r data_lookup}
+data$res_enrich %>%
+  head(n = 100)%>%
+  datatable()
+
+
+  
+  datatable(data$res_enrich)
+```
+
+We can also "distill" this data (GeneTonic) as a markov clustering to get an idea of geneset clusters that belong together.
+
+```{r GO_tabular}
+distilled <- distill_enrichment(gtl = data,
+                                n_gs = 100,
+                                cluster_fun = "cluster_markov")
+
+distilled$distilled_table %>%
+  datatable()
+```
+
+
+plotting these new clusters in an interactive network.
+
+```{r visNetwork_cluster}
+# storing the clustered results for later
+dg <- distilled$distilled_em
+
+# defining a color palette for nicer display 
+colpal <- colorspace::rainbow_hcl(length(unique(V(dg)$color)))[V(dg)$color] 
+V(dg)$color.background <- scales::alpha(colpal, alpha = 0.8) 
+V(dg)$color.highlight <- scales::alpha(colpal, alpha = 1) 
+V(dg)$color.hover <- scales::alpha(colpal, alpha = 0.5) 
+V(dg)$color.border <- "black" 
+
+# ploting an interactive network that colors the genesets according to the supercluster 
+visNetwork::visIgraph(dg) %>% 
+  visOptions(highlightNearest = list(enabled = TRUE, degree = 1, hover = TRUE), 
+             nodesIdSelection = TRUE, 
+             selectedBy = "membership")
+
+# ggsave("visNet_cluster.pdf")
+```
+
+
+## examination of cluster 3
+
+```{r heatmaps_Bcells_tabbed, message = F}
+# generate the vst transformed data from the DESeq2 results
+vst_data <- DESeq2::vst(data$dds)
+
+c_3 <- c("GO:0030890", "GO:0050853", "GO:0002313", "GO:0030183")
+# "GO:0042110"
+
+# then, generate the tabbed heatmap output
+a1 <- gs_heatmap(vst_data, 
+             data$res_de, 
+             data$res_enrich, 
+             data$annotation_obj, 
+             geneset_id = c_3[1], 
+             cluster_columns = TRUE)
+
+a2 <- gs_heatmap(vst_data, 
+             data$res_de, 
+             data$res_enrich, 
+             data$annotation_obj, 
+             geneset_id = c_3[2], 
+             cluster_columns = TRUE)
+
+a3 <- gs_heatmap(vst_data, 
+             data$res_de, 
+             data$res_enrich, 
+             data$annotation_obj, 
+             geneset_id = c_3[3], 
+             cluster_columns = TRUE)
+
+a4 <- gs_heatmap(vst_data, 
+             data$res_de, 
+             data$res_enrich, 
+             data$annotation_obj, 
+             de_only = T,
+             geneset_id = c_3[4], 
+             cluster_columns = TRUE)
+
+a5 <- gs_heatmap(vst_data, 
+             data$res_de, 
+             data$res_enrich, 
+             data$annotation_obj, 
+             de_only = T,
+             geneset_id = c_3[5], 
+             cluster_columns = TRUE)
+
+a1
+# ggsave("c3_1.pdf")
+a2
+# ggsave("c3_2.pdf")
+a3
+# ggsave("c3_3.pdf")
+a4
+# ggsave("c3_4.pdf")
+a5
+# ggsave("c3_5.pdf")
+
+```
+
+Then, I will try to generate a vocanoplot that highlights the genes involved in the genesets mentioned above.
+
+```{r volcano T8 cluster 3, message = F}
+volcano_T8 <- read_excel("out_dennis_leukemia_condition_g2_vs_g1_tbl_res_DESeq.xlsx") 
+
+volc_distilled2(
+  data = volcano_T8,
+  res_enrich = data$res_enrich,
+  exp_thres = 1,
+  gs_ids = c_3,
+  add = c("Vpreb1", "Vpreb2", "Igll3", "Igll1", "Ccnd3", "Ccnd2")
+)
+
+# ggsave("c3_T8.pdf")
+```
+
+generating the same volcano plot with the data from T11
+
+```{r volcano_T11}
+# data loading and cleaning of the available T11 data set
+volcano_T11 <- read_delim("volcano.csv", delim = ";", 
+    escape_double = FALSE, locale = locale(decimal_mark = ","), 
+    trim_ws = TRUE)
+
+volcano_T11 <- volcano_T11 %>%
+  select(log2FoldChange, 'adjusted P -log10', geneSymbol) %>%
+  na.omit() 
+
+# create geneset vector that combines these four GO genesets from cluster 3 (including some other B cell markers)
+target <- data$res_enrich %>%
+  filter(
+    gs_id %in% c("GO:0030183", "GO:0002313", "GO:0050853", "GO:0030890", "GO:0042110")
+  ) %>%
+  select(gs_genes) %>% 
+  as_vector() %>%
+  strsplit(",") %>%
+  unlist() %>%
+  unname() %>%
+  c(., "Vpreb1", "Vpreb2", "Igll3", "Igll1", "Ccnd3", "Ccnd2")
+
+# creating 
+volcano_interest_T11 <- volcano_T11 %>%
+   filter(geneSymbol %in% target)
+
+# generating a vector containing all the highly regulated genes in the target geneset
+volcano_interest_hi_T11 <- volcano_interest_T11 %>%
+  filter(log2FoldChange >= 1 | log2FoldChange <= -1) 
+
+## Plot function for the volcano plot
+ggplot(mapping = aes(x = log2FoldChange, y = `adjusted P -log10`)) +
+  # general scatter plot with all the genes
+  geom_point(data = volcano_T11 %>%
+               filter(
+                 log2FoldChange >= 1 | log2FoldChange <= -1
+               ), 
+             size = 3,
+             alpha = 0.5,
+             shape = 21
+             ) +
+  geom_point(data = volcano_T11 %>%
+               filter(
+                 (log2FoldChange <= 1 & log2FoldChange >= 0) | 
+                  (log2FoldChange >= -1 & log2FoldChange <= 0)
+               ), 
+             size = 3,
+             alpha = 0.01,
+             shape = 21
+             ) +
+  # highlighting the most important genes
+  geom_point(data = volcano_interest_T11 %>%
+               filter(
+                 log2FoldChange >= 1 | log2FoldChange <= -1
+               ), 
+             color = "#BA2B34", 
+             alpha = 1,
+             size = 3
+             ) +
+  geom_point(data = volcano_interest_T11 %>%
+               filter(
+                 (log2FoldChange <= 1 & log2FoldChange >= 0) | 
+                  (log2FoldChange >= -1 & log2FoldChange <= 0)
+               ), 
+             color = "#BA2B34", 
+             alpha = 0.1,
+             size = 3
+             ) +
+  # annotating the highlighted genes
+  geom_text_repel(data = volcano_interest_T11 %>%
+                    filter(
+                      log2FoldChange >= 1 | log2FoldChange <= -1
+                    ), 
+            aes(label = geneSymbol, x = log2FoldChange-0.1), 
+            size = 3, hjust = 1, vjust = 0, max.overlaps = 15 
+            ) +
+  theme_minimal() +
+  geom_vline(aes(xintercept = 0)) +
+  geom_vline(aes(xintercept = 1)) +
+  geom_vline(aes(xintercept = -1)) +
+  theme( axis.line.x = element_line(color="black"),
+         axis.title.x = element_text(size=12, face="bold",
+                                     margin = margin(t = 7, b = 5)),
+         axis.title.y = element_text(size=12, face="bold",
+                                     margin = margin(r = 11, l = 5)),
+         axis.text.x = element_text(size=11, face="bold"),
+         axis.text.y = element_text(size=10, face="bold")
+         ) +
+# theme_bw() +
+#  theme(panel.grid.major = element_blank(),
+     # panel.grid.minor = element_blank(),
+     # panel.border = element_blank(), 
+     # axis.line = element_line(colour = "black")
+    # ) +
+  guides(color = FALSE) +
+  scale_color_manual(values = c("#A0A09F", "#A7CFEE")) +
+  labs(y = "BH-adjusted P (-log10)",
+       x = "log2(fold change)"
+       )  +
+  xlim(-6, 6) +
+  coord_fixed(ratio = 1/10)
+
+# ggsave("c3_T11_volc.pdf")
+```
+
+## examination of cluster 11 in the T8 and T11 dataset
+
+```{r volcano_cluster 11}
+c_11 <-  c("GO:0000122", "GO:0010557", "GO:0006915", "GO:0042127", "GO:0045943", "GO:0043065", "GO:1901701", "GO:0043066", "GO:0042326", "GO:0032870", "GO:0071407", "GO:0071417")
+
+# 1. volcano with the genes from geneset cluster 11
+volc_distilled2(
+  data = volcano_T8,
+  gs_ids = "GO:0006915",
+  exp_thres = 1,
+  res_enrich = data$res_enrich,
+  add = NULL
+)
+
+# ggsave("apopt_T8.pdf")
+
+```
+
+Generating a bar plot to indicate regulation strength of genesets involved in each cluster
+
+```{r bar_plot_c11}
+# cluster 11
+c11_enrich <- data$res_enrich %>%
+  select(gs_id, gs_description, z_score, gs_pvalue) %>%
+  filter(gs_id %in% c_11) %>%
+  arrange(desc(z_score))
+
+c11_enrich$gs_description <- factor(
+  c11_enrich$gs_description, 
+  levels = c11_enrich$gs_description[order(c11_enrich$z_score)])
+
+p1 <- ggplot(data = c11_enrich, aes(y = gs_description, x = z_score)) +
+  geom_col() + 
+  theme_minimal()
+
+p1
+
+# ggsave ("c11_T8_barplot.pdf")
+
+# cluster 3
+c3_enrich <- data$res_enrich %>%
+  select(gs_id, gs_description, z_score, gs_pvalue) %>%
+  filter(gs_id %in% c_3) %>%
+  arrange(desc(z_score))
+
+c3_enrich$gs_description <- factor(
+  c3_enrich$gs_description, 
+  levels = c3_enrich$gs_description[order(c3_enrich$z_score)])
+
+p3 <- ggplot(data = c3_enrich, aes(y = gs_description, x = z_score)) +
+  geom_col() + 
+  theme_minimal()
+
+p3
+
+# ggsave ("c3_T8_barplot.pdf")
+```
+
+## examining the genes that are significantly regulated in both T8 and T11
+
+To answer the question which genes are altered relevantly in both datasets (i.e. T8 and T11)
+
+```{r comparative_alteration}
+
+T11_reg <- volcano_T11 %>%
+  filter(log2FoldChange >= 1 | log2FoldChange <= -1) %>%
+  select(geneSymbol) %>%
+  as_vector() %>%
+  unname()
+
+T8T11_reg <- volcano_T8 %>%
+  filter(geneSymbol %in% T11_reg) %>%
+  filter(log2FoldChange >= 1 | log2FoldChange <= -1) %>%
+  select(geneSymbol) %>%
+  as_vector() %>%
+  unname()
+
+shared <- volcano_T8 %>%
+  filter(geneSymbol %in% T8T11_reg)
+
+shared_T11 <- volcano_T11 %>%
+  filter(geneSymbol %in% T8T11_reg)
+
+datatable(shared)
+```
+
+to plot this visually 
+
+```{r shared_colplot}
+shared_top <- shared %>%
+  arrange(desc(log2FoldChange)) %>%
+  mutate(n = row_number(),
+         nn = 1 + max(n) - n) %>%
+  ungroup() %>%
+  filter(n <= 25 | nn <= 8)
+
+shared_top_T11 <- shared_T11 %>%
+  arrange(desc(log2FoldChange)) %>%
+  mutate(n = row_number(),
+         nn = 1 + max(n) - n) %>%
+  ungroup() %>%
+  filter(n <= 25 | nn <= 8)
+
+shared_top$geneSymbol <- factor(
+  shared_top$geneSymbol, 
+  levels = shared_top$geneSymbol[order(shared_top$log2FoldChange)])
+
+shared_top_T11$geneSymbol <- factor(
+  shared_top_T11$geneSymbol, 
+  levels = shared_top_T11$geneSymbol[order(shared_top_T11$log2FoldChange)])
+
+ggplot(data = shared_top, mapping = aes(x = geneSymbol,y = log2FoldChange, fill = -log(padj))) +
+  geom_col() +
+  scale_fill_gradient(low="#2C4D9D", high="grey") +
+  theme(axis.text.x=element_text(color = "black", size=7, angle=90, vjust=.8, hjust=1)) +
+  theme(legend.title = element_blank()) +
+  coord_fixed(ratio = 1/1.2)
+
+# ggsave("shared_T8.pdf")
+
+ggplot(data = shared_top_T11, mapping = aes(x = geneSymbol,y = log2FoldChange, fill = (`adjusted P -log10`))) +
+  geom_col() +
+  scale_fill_gradient(low="#2C4D9D", high="grey") +
+  theme(axis.text.x=element_text(color = "black", size=7, angle=90, vjust=.8, hjust=1)) +
+  theme(legend.title = element_blank()) +
+  coord_fixed(ratio = 2/1)
+
+# ggsave("shared_T11.pdf")
+```
+
+
+## creating a MDS plot for top 100 GO GS
+
+We can show these genesets also in an MDS plot
+
+```{r mds_GO, cache = T, message = F}
+gs_mds(gtl = data,
+       n_gs = 100,
+       # mds_labels = 5,
+       similarity_measure = "kappa_matrix",
+       mds_k = 2,
+       gs_labels = c_3,
+       mds_colorby = "z_score",
+       plot_title = NULL)
+
+# ggsave("MDS B cells.pdf")
+
+gs_mds(gtl = data,
+       n_gs = 100,
+       # mds_labels = 5,
+       similarity_measure = "kappa_matrix",
+       mds_k = 2,
+       gs_labels = c_11,
+       mds_colorby = "z_score",
+       plot_title = NULL)
+
+# ggsave("MDS apop.pdf")
+
+gs_mds(gtl = data,
+       n_gs = 100,
+       mds_labels = 10,
+       similarity_measure = "kappa_matrix",
+       mds_k = 2,
+       mds_colorby = "z_score",
+       plot_title = NULL)
+
+# ggsave("MDS GO.pdf")
+```
+
+## bipartite graph for GO and genes
+
+Next, we might want to look at the interaction of these genesets in the form of a network analyis, including (as a bipartite graph) both genesets and genes.
+
+```{r network_GO, message = F}
+ggs <- ggs_graph(gtl = data,
+                 n_gs = 30)
+
+ggs
+
+ggs %>%
+  visIgraph() %>%
+  visOptions(highlightNearest = list(enabled = TRUE,
+                                     degree = 1,
+                                     hover = TRUE),
+             nodesIdSelection = TRUE)
+```
+
+Finally, for the initial analysis, we can prepare an interaction network of genesets, where the gene sets are presented as circles, their diameter corresponding to the number of genes in the set, their color corresponding to the z-score for the differential expression. We will use the top 100 genesets for a diverse overview.
+
+```{r enrichment_map}
+em <- GeneTonic::enrichment_map(gtl = data, 
+                                n_gs = 100, 
+                                color_by = "z_score")
+
+em %>% 
+  visIgraph() %>% 
+  visOptions(highlightNearest = list(enabled = TRUE,
+                                     degree = 1,
+                                     hover = TRUE),
+             nodesIdSelection = TRUE)
+```
+
+
+## visualisation for publication of gene sets
+
+As summary visualisation of the simplified GO data as a volcano plot
+
+```{r volcano_GO}
+res_enrich_simplified <- gs_simplify(data$res_enrich,
+                                     gs_overlap = 0.7)
+
+gs_volcano(res_enrich_simplified,
+           p_threshold = 0.05,
+           color_by = "aggr_score",
+           volcano_labels = 6,
+           scale_circles = 0.5,
+           plot_title = "top regulated genesets")
+
+# ggsave("GO_volc.pdf")
+```
+
+and finally a simple output as dotplot for the most significantly regulated genesets. Plus a visualization of the top genesets and how the genes involved in their overexpression might overlap between the top regulated sets.
+
+```{r overview_GO}
+gs_summary_overview(data$res_enrich,
+                    n_gs = 10,
+                    p_value_column = "gs_pvalue",
+                    color_by = "z_score")
+```
+```{r geneset_heatmap}
+gs_summary_heat(gtl = data,
+                n_gs = 10)
+```
+
+# pcaExplorer
+
+## initial pca
+
+First, we generate the pca and plot the first two PCs, checking the scree plot.
+
+```{r pca_initial}
+vst <- vst(data$dds)
+rld <- rlog(data$dds)
+pcaplot(rld,intgroup = c("condition"),ntop = 1000,
+        pcX = 1, pcY = 2, title = "T8 I4 vs. GFP PCA on samples - PC1 vs PC2",
+        ellipse = TRUE)
+
+ggsave("PCA.pdf")
+
+```
+
+We have a solid representation of the data with PC1 and PC2. Nonetheless, we could look at the scree plot to see what amount of information is to be gained from subsequent PCs.
+
+```{r scree_plot}
+pcaobj_RNA <- prcomp(t(assay(rld)))
+pcascree(pcaobj_RNA,type="pev",
+         title="Proportion of explained proportion of variance")
+```
+
+## hiloadings
+
+Now, we check the loadings that explain the variance observed in PC1
+
+```{r hiloadings_tab}
+hi_loadings(pcaobj_RNA,topN = 20, exprTable=counts(data$dds))
+```
+
+```{r hiloadings_plot}
+hi_loadings(pcaobj_RNA, topN = 26, annotation = data$annotation_obj)
+
+```
+
+We already see, that the preB cell receptor components are an important factor as loadings of the PC1. However, we can now also go ahead and perform GO analysis of the loadings of PC1.
+
+```{r pca2GO, message = F, cache = T}
+bg_ids <- rownames(data$dds)[rowSums(counts(data$dds)) > 0]
+goquick <- limmaquickpca2go(rld,
+                            pca_ngenes = 5000,
+                            inputType = "ENSEMBL",
+                            organism = "Mm",
+                            loadings_ngenes = 50,
+                            background_genes = bg_ids
+                            )
+
+# for a smooth interactive exploration, use DT::datatable
+datatable(goquick$PC1$posLoad)
+```
+
+# Session info
+
+```{r}
+sessionInfo()
+```
+
